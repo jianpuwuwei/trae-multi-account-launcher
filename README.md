@@ -34,7 +34,8 @@ Trae CN 客户端默认只使用一份用户配置（`%APPDATA%\Trae CN`），�
 | 耦合变量清理 | 删除从父进程继承的 `VSCODE_IPC_HOOK*`、`VSCODE_EXTENSIONS`、`ELECTRON_RUN_AS_NODE` 等 |
 | 进程识别 | 命令行显式带 `--user-data-dir=<容器路径>`，作为该容器的唯一标记 |
 | 状态查询 | 通过 WMI 查询 `Win32_Process` 命令行的容器标记，列出全部 PID |
-| 停止 | `taskkill /PID <主进程> /T /F` 带走进程树，再按标记清扫孤儿进程 |
+| 停止 | `taskkill /PID <主进程> /T /F` 带走进程树，再按标记清扫孤儿进程，并用 Restart Manager 精确清理锁定容器文件的浏览器进程 |
+| 重置 | 先停容器，再递归删除目录；自动清除只读文件属性，遇到占用则定位占用进程后重试 |
 
 > 说明：曾尝试用命名 Job Object 托管进程树，但 Windows 在最后一个 Job 句柄关闭时会销毁作业对象，启动器退出后无法再按名字访问，因此改为上述标记识别方案。
 
@@ -61,7 +62,8 @@ Trae CN 客户端默认只使用一份用户配置（`%APPDATA%\Trae CN`），�
 ├─ AppData\Roaming
 ├─ AppData\Local
 ├─ Temp
-├─ Home
+├─ Home                    # 容器内置用户目录（扩展、签到状态在这里）
+├─ workspace               # 容器启动时自动打开的工作区（扩展加载必需）
 └─ container.ini           # 记录主进程 PID、路径、启动时间
 ```
 
@@ -112,10 +114,65 @@ rootDir=%LOCALAPPDATA%\TraeSandbox
 
 # 是否隔离 USERPROFILE（1=是，0=否）
 isolateHome=1
+
+# 启动容器前自动复制到容器扩展目录的扩展文件夹（多个用 ; 分隔）
+extensionsDir=%USERPROFILE%\.trae-cn\extensions\local.trae-auto-checkin-1.0.0
 ```
 
 - 自动探测顺序：正在运行的 Trae 进程 → 卸载注册表（HKLM/HKCU，含 WOW6432Node）→ 常见安装目录。
 - 自动探测失败时，请手动填写 `traePath`，例如 `traePath=C:\Program Files\Trae CN\Trae CN.exe`。
+
+## 在沙箱实例里安装扩展（如自动签到插件）
+
+容器实例的扩展目录由 `USERPROFILE` 决定，隔离模式下位于：
+
+```
+%LOCALAPPDATA%\TraeSandbox\account-N\Home\.trae-cn\extensions\
+```
+
+Trae 不会只因为「目录里多了一个扩展文件夹」就加载它，必须满足两点，启动器已自动处理：
+
+1. **写入扩展索引** `<容器扩展目录>\extensions.json`，并从 `.obsolete` 中清除该扩展（否则会被当作已移除的残留扩展）；
+2. **容器窗口必须打开一个工作区**，否则 Trae 进入 Solo Lite 形态，用户扩展（含本插件）不会加载。启动器为此会自动打开 `<容器>\workspace`，无需手工干预。
+
+### 方式一：自动同步（推荐）
+
+1. 先把扩展安装到宿主客户端，确认目录存在，例如：
+   `%USERPROFILE%\.trae-cn\extensions\local.trae-auto-checkin-1.0.0`
+2. 在 `config.ini` 中填写要同步的扩展文件夹（多个用 `;` 分隔）：
+
+   ```ini
+   extensionsDir=%USERPROFILE%\.trae-cn\extensions\local.trae-auto-checkin-1.0.0
+   ```
+
+3. 重新启动容器（`start n` 或 `dual`），出现 `已同步扩展：local.trae-auto-checkin-1.0.0` 即成功。
+
+同步时若容器已存在同名扩展目录会跳过复制，但每次启动都会确保索引存在。
+
+### 方式二：手动复制
+
+容器关闭后，把宿主的扩展文件夹整个复制过去（随后任选一次 `start n`，启动器会补写索引）：
+
+```powershell
+$name = 'local.trae-auto-checkin-1.0.0'
+$src  = "$env:USERPROFILE\.trae-cn\extensions\$name"
+$dst  = "$env:LOCALAPPDATA\TraeSandbox\account-2\Home\.trae-cn\extensions"
+New-Item -ItemType Directory -Force -Path $dst | Out-Null
+Copy-Item -Recurse -Force $src $dst
+```
+
+然后重新 `start 2` 即可。
+
+### 如何确认扩展已生效
+
+容器启动并**完成登录**后（未登录时只显示登录窗口，扩展不会激活），检查：
+
+- `<容器>\Home\.trae-cn\extensions\extensions.json` 中存在该扩展的条目；
+- `<容器>\Home\.trae-cn\auto-checkin\state.json` 已生成（自动签到插件的激活标志）；
+- 客户端「输出」面板中可看到「Trae 自动签到」频道日志。
+
+> 注意：扩展目录隔离依赖 `isolateHome=1`。若设为 0，容器会直接使用宿主 `%USERPROFILE%\.trae-cn\extensions`，此时宿主已安装的扩展天然可用，但不再隔离。
+
 
 ## 目录结构
 

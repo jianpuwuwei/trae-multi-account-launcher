@@ -22,6 +22,7 @@ namespace TraeSandbox
         private static string _rootBase;
         private static string _configuredExe;
         private static bool _isolateHome = true;
+        private static string[] _extensionSources = new string[0];
 
         private const string ProcessName = "Trae CN";
 
@@ -105,7 +106,13 @@ namespace TraeSandbox
 
             Console.WriteLine("启动容器：" + container.Name);
             Console.WriteLine("隔离目录：" + container.RootDir);
-            int pid = container.Start(exe, null);
+            string[] copied = container.SyncExtensions(_extensionSources);
+            if (copied.Length > 0)
+            {
+                Console.WriteLine("已同步扩展：" + string.Join(", ", copied));
+            }
+            // 容器必须打开一个工作区：Trae 在无工作区的窗口里不会加载用户扩展（含自动签到插件）
+            int pid = container.Start(exe, new string[] { container.WorkspaceDir });
             if (pid < 0)
             {
                 Console.WriteLine(container.Name + " 已在运行。");
@@ -457,6 +464,19 @@ namespace TraeSandbox
                     {
                         _isolateHome = !(value == "0" || value.Equals("false", StringComparison.OrdinalIgnoreCase));
                     }
+                    else if (string.Equals(key, "extensionsDir", StringComparison.OrdinalIgnoreCase))
+                    {
+                        List<string> list = new List<string>();
+                        foreach (string part in value.Split(';'))
+                        {
+                            string one = Environment.ExpandEnvironmentVariables(part.Trim().Trim('"'));
+                            if (one.Length > 0)
+                            {
+                                list.Add(one);
+                            }
+                        }
+                        _extensionSources = list.ToArray();
+                    }
                 }
             }
             _rootBase = rootDir;
@@ -471,7 +491,7 @@ namespace TraeSandbox
             Console.WriteLine("  TraeSandbox.exe stop all    停止全部隔离容器");
             Console.WriteLine("  TraeSandbox.exe reset n     清空 n 号容器（退出登录并清除缓存）");
             Console.WriteLine("  TraeSandbox.exe status      查看容器状态");
-            Console.WriteLine("配置：config.ini（traePath / rootDir / isolateHome）");
+            Console.WriteLine("配置：config.ini（traePath / rootDir / isolateHome / extensionsDir）");
         }
     }
 }
