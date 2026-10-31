@@ -1,0 +1,4 @@
+# .gitignore
+diag.txt
+*.log
+.vs/
